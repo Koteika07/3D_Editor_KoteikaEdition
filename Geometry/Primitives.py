@@ -77,7 +77,7 @@ class Point:
 @dataclass  # декоратор, в нашем случае автоматически создает
 # __init__ __repr__ __eq__
 # frozen = True => объект неизменяемый (автоматический __hash__)
-class Edge(frozenset=True):
+class Edge(frozen=True):
     """Base class for Edge in 3d space"""
 
     id: int
@@ -135,9 +135,8 @@ class Edge(frozenset=True):
 
 @dataclass
 class Plane:
-    """Base class for Plane in 3d space"""
-
-    """
+    """Base class for Plane in 3d space
+    
     Плоскость может быть задана:
         - тремя точками
         - одной точкой и normal-ью, if плоскость параллельна другой
@@ -149,7 +148,7 @@ class Plane:
     point_3_id: Optional[int] = None
     # optional - нужный тип или None
     # field - рассишеренная нстройка dataclasses
-    _normal: Optional[np.ndarray] = field(default=None, repr=False)
+    normal: Optional[np.ndarray] = field(default=None, repr=False)
 
     def __post_init__(self):
         """Валидация после создания"""
@@ -207,16 +206,16 @@ class Plane:
         return normal, d
 
     def get_normal(self, points: Dict[int, Point]) -> np.ndarray:
-        normal, _ = self.get_equation(points)
+        normal, _ = self.get_plane_equation(points)
         return normal
 
     def get_d(self, points: Dict[int, Point]) -> float:
-        _, d = self.get_equation(points)
+        _, d = self.get_plane_equation(points)
         return d
 
     def signed_distance(self, point: np.ndarray, points: Dict[int, Point]) -> float:
         """Вычислияет знаковое расстояние от точки до плоскости"""
-        normal, d = self.get_equation(points)
+        normal, d = self.get_plane_equation(points)
         return float(np.dot(normal, as_vector3(point, name="point")) + d)
 
     def is_point_on_plane(self, point: np.ndarray, points: Dict[int, Point]) -> bool:
