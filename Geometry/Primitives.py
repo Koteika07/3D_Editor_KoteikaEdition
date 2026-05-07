@@ -65,6 +65,9 @@ class Point:
             "position": self.position.tolist()
         }
 
+    # превращает метод в метод класса, а не экземпляра, т.е не привязан к конкретному экземпляру
+    # и может создать новый экземпляр без существующего
+    # первый аргумент сам класс cls
     @classmethod
     def from_dict(cls, data: dict) -> Point:
         """Десериализация: JSON (dict) -> Object"""
@@ -136,7 +139,7 @@ class Edge(frozen=True):
 @dataclass
 class Plane:
     """Base class for Plane in 3d space
-    
+
     Плоскость может быть задана:
         - тремя точками
         - одной точкой и normal-ью, if плоскость параллельна другой
