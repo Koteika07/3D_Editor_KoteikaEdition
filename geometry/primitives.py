@@ -77,10 +77,10 @@ class Point:
         )
 
 
-@dataclass  # декоратор, в нашем случае автоматически создает
+@dataclass(frozen=True)  # декоратор, в нашем случае автоматически создает
 # __init__ __repr__ __eq__
 # frozen = True => объект неизменяемый (автоматический __hash__)
-class Edge(frozen=True):
+class Edge:
     """Base class for Edge in 3d space"""
 
     id: int

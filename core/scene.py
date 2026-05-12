@@ -4,7 +4,8 @@
 """
 
 from __future__ import annotations  # преващает аннотацию в строки (лениво)
-from typing import Dict, Path, Optional
+from typing import Dict, Optional
+from pathlib import Path
 from enum import Enum
 import json
 
@@ -45,6 +46,7 @@ class Scene:
 
     def _reserve_id(self, obj_type: ObjectType,
                     explicit_id: Optional[int] = None) -> int:
+        """Резервирует новый ID для объекта указанного типа"""
         new_id = (
             int(explicit_id)
             if explicit_id is not None
@@ -54,6 +56,7 @@ class Scene:
         return new_id
 
     def _get_container(self, obj_type: ObjectType) -> Dict:
+        # получем словарь-контейнер который является хранилищем для нашего типа по имени объекта
         return getattr(self, f"{obj_type.value}s")
 
     def add(self, obj_type: ObjectType, obj_id: int, obj: object) -> None:
