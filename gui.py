@@ -13,7 +13,7 @@ from geometry import EPSILON
 class ViewState:
     """Данные камеры для поворота и масштабирования"""
 
-    def __init__(self, zoom=120.0):
+    def __init__(self, zoom=75.0):
         self.angle_x = 0.0      # radians
         self.angle_y = 0.0      # radians
         self.angle_z = 0.0      # radians
@@ -38,9 +38,9 @@ class FaceCulling:
     """Управление видимостью граней, ребер и точек в зависимости от вида камеры"""
 
     def __init__(self):
-        self.backface = True          # Скрыть задние грани
-        self.hide_back_edges = True   # Скрыть ребра на задних гранях
-        self.hide_back_points = True  # Скрыть точки на задних гранях
+        self.backface = True          # скрыть задние грани
+        self.hide_back_edges = True   # скрыть ребра на задних гранях
+        self.hide_back_points = True  # скрыть точки на задних гранях
 
     def get_face_normal(self, face, points):
         """Вычисляет нормаль к грани в мировых координатах"""
@@ -100,7 +100,7 @@ class GeometryViewer:
         self.view = ViewState(zoom=75.0)
         self.culling = FaceCulling()
 
-        # цвета в формате RGBA для DearPyGui
+        # цвета в формате RGBA для DearPyGui (0-255)
         self.face_outline = [100, 100, 200, 255]
         self.face_fill = [100, 100, 200, 80]
         self.edge_color = [255, 200, 0, 255]
@@ -108,6 +108,7 @@ class GeometryViewer:
 
         # статы для мышки
         self.last_mouse = {"x": 0.0, "y": 0.0}
+        self.viewport_rect = None
 
         # стартовая сцена
         self.api.create_cube(center=(-2, 0, 0), size=1.5, name="Cube")
@@ -149,12 +150,39 @@ class GeometryViewer:
         pos, _ = self._project_point(point.position, size)
         dpg.draw_circle(pos, 5, color=self.point_color, fill=self.point_color)
 
+    def _update_viewport_rect(self):
+        """Обновляет прямоугольник области вьюпорта"""
+        try:
+            pos = dpg.get_item_pos("Viewport")
+            width = dpg.get_item_width("Viewport")
+            height = dpg.get_item_height("Viewport")
+            if pos and width > 0 and height > 0:
+                self.viewport_rect = (pos[0], pos[1], pos[0] + width, pos[1] + height)
+        except:
+            self.viewport_rect = None
+
+    def _is_mouse_over_viewport(self) -> bool:
+        """Проверяет находится ли мышь над областью вьюпорта"""
+        if self.viewport_rect is None:
+            self._update_viewport_rect()
+
+        if self.viewport_rect is None:
+            return True
+
+        min_x, min_y, max_x, max_y = self.viewport_rect
+        mouse_x, mouse_y = dpg.get_mouse_pos(local=False)
+
+        return (min_x <= mouse_x <= max_x and min_y <= mouse_y <= max_y)
+
     def render(self, viewport_tag: str, drawlist_tag: str):
         """Основной рендер для сцены"""
         w = dpg.get_item_width(viewport_tag)
         h = dpg.get_item_height(viewport_tag)
         if w <= 0 or h <= 0:
             return
+
+        # Обновляем rect вьюпорта
+        self._update_viewport_rect()
 
         if dpg.does_item_exist(drawlist_tag):
             dpg.delete_item(drawlist_tag)
@@ -173,6 +201,7 @@ class GeometryViewer:
             visible_faces = []
             for face in faces_list:
                 if self.culling.is_face_visible(face, self.api.scene.points, view_matrix_4x4):
+                    
                     center = np.mean([self.api.scene.points[vid].position for vid in face.vertex_ids], axis=0)
                     _, depth = self._project_point(center, (w, h))
                     visible_faces.append((depth, face))
@@ -198,7 +227,7 @@ class GeometryViewer:
     def run(self):
         """Запускает графический интерфейс"""
         dpg.create_context()  # cоздаём контекст DearPyGui
-        dpg.create_viewport(title="Koteika 3D Editor", width=1280, height=720)
+        dpg.create_viewport(title="Koteika 3D Editor", width=1320, height=750)
         dpg.setup_dearpygui()  # настраиваем DearPyGui
 
         # главное окно
@@ -249,30 +278,34 @@ class GeometryViewer:
 
                     dpg.add_text("Colors", color=(100, 200, 255))
 
+                    # конвертируем цвета из 0-255 в 0-1 для color_edit
                     dpg.add_color_edit(tag="face_color_picker", 
-                                       default_value=self.face_outline,
+                                       default_value=self.face_outline[:3],
                                        width=260, no_inputs=True, label="Face Color",
                                        callback=lambda s, a: self._update_face_color(a))
 
                     dpg.add_color_edit(tag="edge_color_picker", 
-                                       default_value=self.edge_color,
+                                       default_value=self.edge_color[:3],
                                        width=260, no_inputs=True, label="Edge Color",
                                        callback=lambda s, a: self._update_edge_color(a))
 
                     dpg.add_color_edit(tag="point_color_picker", 
-                                       default_value=self.point_color,
+                                       default_value=self.point_color[:3],
                                        width=260, no_inputs=True, label="Point Color",
                                        callback=lambda s, a: self._update_point_color(a))
 
                     dpg.add_separator()
 
                     dpg.add_text("Objects", color=(100, 200, 255))
+                    
                     dpg.add_button(label="Add Cube", width=260,
                                    callback=lambda: self.api.create_cube(center=(0, 0, 0), size=1.0))
                     dpg.add_button(label="Add Pyramid", width=260,
                                    callback=lambda: self.api.create_pyramid(center=(0, 0, 0), base_size=1.0, height=1.0))
                     dpg.add_button(label="Add Sphere", width=260,
                                    callback=lambda: self.api.create_sphere(center=(0, 0, 0), radius=1.0))
+                    dpg.add_button(label="Add Sphere quad", width=260,
+                                   callback=lambda: self.api.create_sphere_quads(center=(0, 0, 0), radius=1.0))
                     dpg.add_button(label="Add Icosahedron", width=260,
                                    callback=lambda: self.api.create_icosahedron(center=(0, 0, 0), radius=1.0))
                     dpg.add_button(label="Clear Scene", width=260,
@@ -282,35 +315,38 @@ class GeometryViewer:
 
                     self.info_text = dpg.add_text("", color=(150, 150, 150))
 
-        # обработчики мыши
+        # обработчики мыши с проверкой над вьюпортом
         def on_mouse_move(sender, app_data):
-            if dpg.is_mouse_button_down(dpg.mvMouseButton_Left):
+            if тщеself._is_mouse_over_viewport():
+                if dpg.is_mouse_button_down(dpg.mvMouseButton_Left):
+                    mx, my = dpg.get_mouse_pos(local=False)
+                    dx = mx - self.last_mouse["x"]
+                    dy = my - self.last_mouse["y"]
+
+                    shift_pressed = dpg.is_key_down(dpg.mvKey_LShift) or dpg.is_key_down(dpg.mvKey_RShift)
+
+                    if shift_pressed:
+                        self.view.offset_x += dx
+                        self.view.offset_y += dy
+                    else:
+                        self.view.angle_y += dx * 0.005
+                        self.view.angle_x += dy * 0.005
+                        self._sync_sliders()
+
+                    self.last_mouse["x"] = mx
+                    self.last_mouse["y"] = my
+
+        def on_mouse_down(sender, app_data):
+            if self._is_mouse_over_viewport():
                 mx, my = dpg.get_mouse_pos(local=False)
-                dx = mx - self.last_mouse["x"]
-                dy = my - self.last_mouse["y"]
-
-                shift_pressed = dpg.is_key_down(dpg.mvKey_LShift) or dpg.is_key_down(dpg.mvKey_RShift)
-
-                if shift_pressed:
-                    self.view.offset_x += dx
-                    self.view.offset_y += dy
-                else:
-                    self.view.angle_y += dx * 0.005
-                    self.view.angle_x += dy * 0.005
-                    self._sync_sliders()
-
                 self.last_mouse["x"] = mx
                 self.last_mouse["y"] = my
 
-        def on_mouse_down(sender, app_data):
-            mx, my = dpg.get_mouse_pos(local=False)
-            self.last_mouse["x"] = mx
-            self.last_mouse["y"] = my
-
         def on_mouse_wheel(sender, app_data):
-            self.view.zoom *= 1.05 if app_data > 0 else 0.95
-            self.view.zoom = max(20.0, min(500.0, self.view.zoom))
-            dpg.set_value("zoom_slider", self.view.zoom)
+            if self._is_mouse_over_viewport():
+                self.view.zoom *= 1.05 if app_data > 0 else 0.95
+                self.view.zoom = max(20.0, min(500.0, self.view.zoom))
+                dpg.set_value("zoom_slider", self.view.zoom)
 
         # регистрируем обработчики
         with dpg.handler_registry():
@@ -348,16 +384,22 @@ class GeometryViewer:
 
     def _update_face_color(self, color):
         """Обновляет цвет граней"""
-        self.face_outline = [color[0], color[1], color[2], 255]
-        self.face_fill = [color[0], color[1], color[2], 80]
+        # color приходит в формате RGB в диапазоне 0-1
+        r, g, b = [int(c * 255) for c in color[:3]]
+        self.face_outline = [r, g, b, 255]
+        self.face_fill = [r, g, b, 80]
 
     def _update_edge_color(self, color):
         """Обновляет цвет рёбер"""
-        self.edge_color = [color[0], color[1], color[2], 255]
+        # color приходит в формате RGB в диапазоне 0-1
+        r, g, b = [int(c * 255) for c in color[:3]]
+        self.edge_color = [r, g, b, 255]
 
     def _update_point_color(self, color):
         """Обновляет цвет точек"""
-        self.point_color = [color[0], color[1], color[2], 255]
+        # color приходит в формате RGB в диапазоне 0-1
+        r, g, b = [int(c * 255) for c in color[:3]]
+        self.point_color = [r, g, b, 255]
 
 
 def main():
