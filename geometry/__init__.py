@@ -8,8 +8,8 @@ from geometry.factory_geometry import (
     create_cube,
     create_pyramid,
     create_sphere,
-    create_dodecahedron,
-    build_topology
+    create_sphere_quads,
+    create_icosahedron
 )
 
 __all__ = [
@@ -22,7 +22,7 @@ __all__ = [
     "create_cube",
     "create_pyramid",
     "create_sphere",
-    "create_dodecahedron",
-    "build_topology",
+    "create_sphere_quads",
+    "create_icosahedron",
     "as_vector3",
 ]

@@ -9,8 +9,7 @@ from pathlib import Path
 from enum import Enum
 import json
 
-from geometry.primitives import Edge, Plane, Point
-from geometry.structures import Face, Polyhedron
+from geometry import Edge, Plane, Point, Face, Polyhedron
 
 
 class ObjectType(Enum):

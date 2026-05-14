@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List
 import numpy as np
 
-from geometry.primitives import Point
+from geometry import Point
 
 
 @dataclass
