@@ -1,6 +1,6 @@
 # 3D Geometry Editor - Koteika Edition
 
-Интерактивный 3D-редактор для создания и редактирования геометрических объектов: кубы, сферы, пирамиды, икосаэдры. Реализован на Python с использованием библиотеки Dear PyGui.
+Интерактивный 3D-редактор для создания и редактирования геометрических объектов: кубы, сферы, пирамиды, икосаэдры. Реализован на Python с использованием библиотеки Dear PyGui
 
 ## Возможности
 
@@ -79,14 +79,14 @@ pip install -r requirements.txt
 ## Структура проекта
 
 3D_Editor_KoteikaEdition/
-├── core/ # Ядро приложения
+├── core/
 │ ├── api.py # GeometryAPI
 │ └── scene.py # Scene (данные + JSON)
-├── geometry/ # Геометрические примитивы
+├── geometry/
 │ ├── primitives.py # Point, Edge, Plane
 │ ├── structures.py # Face, Polyhedron
 │ └── factory_geometry.py # Фабрики геометрических объектов
-├── tests/ # Модульные тесты
+├── tests/
 │ ├── test_primitives.py
 │ ├── test_structures.py
 │ ├── test_factory_geometry.py
