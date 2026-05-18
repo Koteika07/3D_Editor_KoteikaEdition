@@ -573,11 +573,11 @@ class GeometryViewer:
     def run(self):
         """Запускает графический интерфейс"""
         dpg.create_context()  # cоздаём контекст DearPyGui
-        dpg.create_viewport(title="Koteika 3D Editor", width=1320, height=750)
+        dpg.create_viewport(title="Koteika 3D Editor", width=1400, height=750)
         dpg.setup_dearpygui()  # настраиваем DearPyGui
 
         # главное окно
-        with dpg.window(tag="MainWindow", width=1280, height=720,
+        with dpg.window(tag="MainWindow", width=1400, height=720,
                         no_scrollbar=True, no_scroll_with_mouse=True):
 
             with dpg.group(horizontal=True):
@@ -588,7 +588,7 @@ class GeometryViewer:
                     dpg.add_spacer(height=5)
 
                 # сontrol panel
-                with dpg.child_window(width=350, height=680, border=True):
+                with dpg.child_window(width=500, height=680, border=True):
 
                     dpg.add_text("Camera Controls", color=(100, 200, 255))
                     dpg.add_separator()
@@ -764,7 +764,7 @@ class GeometryViewer:
                          f"Points: {len(self.api.scene.points)} | "
                          f"Edges: {len(self.api.scene.edges)} | "
                          f"Faces: {len(self.api.scene.faces)} | "
-                         f"Sections: {section_count} | "
+                         f"Sections: {section_count}\n"
                          f"{self.status_message}")
             self.render("Viewport", drawlist_tag)
             dpg.render_dearpygui_frame()
