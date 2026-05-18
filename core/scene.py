@@ -56,6 +56,8 @@ class Scene:
 
     def _get_container(self, obj_type: ObjectType) -> Dict:
         # получем словарь-контейнер который является хранилищем для нашего типа по имени объекта
+        if obj_type is ObjectType.POLYHEDRON:
+            return self.polyhedra
         return getattr(self, f"{obj_type.value}s")
 
     def add(self, obj_type: ObjectType, obj_id: int, obj: object) -> None:
@@ -94,27 +96,34 @@ class Scene:
         for p_data in data.get("points", []):
             obj = Point.from_dict(p_data)
             scene.add(ObjectType.POINT, obj.id, obj)
+            scene._reserve_id(ObjectType.POINT, obj.id)
 
         for e_data in data.get("edges", []):
             obj = Edge.from_dict(e_data)
             scene.add(ObjectType.EDGE, obj.id, obj)
+            scene._reserve_id(ObjectType.EDGE, obj.id)
 
         for pl_data in data.get("planes", []):
             obj = Plane.from_dict(pl_data)
             scene.add(ObjectType.PLANE, obj.id, obj)
+            scene._reserve_id(ObjectType.PLANE, obj.id)
 
         for f_data in data.get("faces", []):
             obj = Face.from_dict(f_data)
             scene.add(ObjectType.FACE, obj.id, obj)
+            scene._reserve_id(ObjectType.FACE, obj.id)
 
         for poly_data in data.get("polyhedra", []):
             obj = Polyhedron.from_dict(poly_data)
             scene.add(ObjectType.POLYHEDRON, obj.id, obj)
+            scene._reserve_id(ObjectType.POLYHEDRON, obj.id)
 
         return scene
 
     def save_json(self, path: Path) -> None:
         path = Path(path)
+        if path.parent != Path("."):
+            path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(self.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
 
     @classmethod

@@ -7,8 +7,9 @@ from pathlib import Path
 import numpy as np
 import math
 
-from core import GeometryAPI
+
 from geometry import EPSILON
+from core import GeometryAPI
 
 
 class ViewState:
@@ -384,30 +385,6 @@ class GeometryViewer:
         value = str(dpg.get_value(tag) or "").strip()
         return Path(value) if value else default_path
 
-    def _path_from_dialog(self, app_data: dict, fallback: Path, suffix: str) -> Path:
-        """Извлекает путь из данных диалогового окна"""
-        raw_path = app_data.get("file_path_name")
-        if not raw_path and app_data.get("file_name"):
-            raw_path = str(Path(app_data.get("current_path", ".")) / app_data["file_name"])
-
-        raw_path = raw_path or str(fallback)
-        path = Path(raw_path)
-
-        if not path.suffix:
-            path = path.with_suffix(suffix)
-        return path
-
-    def _set_scene_path(self, path: Path):
-        """Обновляет путь к сцене"""
-        self.scene_path = path
-        if dpg.does_item_exist("scene_path"):
-            dpg.set_value("scene_path", str(path))
-
-    def _show_dialog(self, tag: str):
-        """Показывает диалоговое окно"""
-        if dpg.does_item_exist(tag):
-            dpg.configure_item(tag, show=True)
-
     def _save_scene_to_path(self, path: Path):
         """Сохраняет сцену"""
         if not path.suffix:
@@ -420,74 +397,47 @@ class GeometryViewer:
         self._set_scene_path(path)  # обновляем путь в UI
         self.status_message = f"Scene saved: {path}"
 
+
     def _save_scene(self):
         """Сохраняет сцену в корневую директорию проекта (из текстового поля)"""
         path = self._path_from_input("scene_path", self.scene_path)
-        self._save_scene_to_path(path)
-
-    def _save_scene_as(self, sender, app_data):
-        """Сохраняет сцену в новый файл (выбор через диалог)"""
-        path = self._path_from_dialog(app_data, self.scene_path, ".json")
-        self._save_scene_to_path(path)
-
-    def _load_scene_from_path(self, path: Path):
-        """Загружает сцену из файла"""
         try:
-            self.api.load(path)  # загружаем сцену через API
-        except (OSError, ValueError) as error:
+            self.api.save(path)
+        except OSError as error:
             self.status_message = str(error)
             return
-        self._set_scene_path(path)
-        self.status_message = f"Scene loaded: {path}"
-        self._refresh_point_selector(force=True)  # обновляем список точек
+        self.scene_path = path
+        self.status_message = f"Scene saved: {path}"
 
     def _load_scene(self):
         """Загружает сцену из файла, лежащего в корневой директории проекта"""
         path = self._path_from_input("scene_path", self.scene_path)
-        self._load_scene_from_path(path)
-
-    def _load_scene_from_dialog(self, sender, app_data):
-        """Загружает сцену (через файловый диалог)"""
-        path = self._path_from_dialog(app_data, self.scene_path, ".json")
-        self._load_scene_from_path(path)
-
-# =======================| Экспорт png  |===========================
-
-    def _set_png_path(self, path: Path):
-        """Обновляет путь для экспорта png в UI"""
-        self.png_path = path
-        if dpg.does_item_exist("png_path"):
-            dpg.set_value("png_path", str(path))
-
-    def _export_png_to_path(self, path: Path):
-        if not path.suffix:
-            path = path.with_suffix(".png")  # добавляем .png
-
-        width = max(1, int(self.last_draw_size[0]))
-        height = max(1, int(self.last_draw_size[1]))
-
         try:
-            image = self._render_to_image(width, height)  # рендерим в PIL Image
-        except RuntimeError as error:
+            self.api.load(path)
+        except (OSError, ValueError) as error:
             self.status_message = str(error)
             return
+        self.scene_path = path
+        self.status_message = f"Scene loaded: {path}"
+        self._refresh_point_selector(force=True)
 
-        if path.parent != Path("."):  # если папка не текущая
-            path.parent.mkdir(parents=True, exist_ok=True)  # создаём папки рекурсивно
-
-        image.save(path)  # сохраняем
-        self._set_png_path(path)
-        self.status_message = f"PNG exported: {path}"
+# =======================| Экспорт png  |===========================
 
     def _export_png(self):
         """Экспорт в корневую директорию проекта"""
         path = self._path_from_input("png_path", self.png_path)
-        self._export_png_to_path(path)
-
-    def _export_png_as(self, sender, app_data):
-        """Экспорт с выбором файла (через диалог)"""
-        path = self._path_from_dialog(app_data, self.png_path, ".png")
-        self._export_png_to_path(path)
+        width = max(1, int(self.last_draw_size[0]))
+        height = max(1, int(self.last_draw_size[1]))
+        try:
+            image = self._render_to_image(width, height)
+        except RuntimeError as error:
+            self.status_message = str(error)
+            return
+        if path.parent != Path("."):
+            path.parent.mkdir(parents=True, exist_ok=True)
+        image.save(path)
+        self.png_path = path
+        self.status_message = f"PNG exported: {path}"
 
     def _render_to_image(self, width: int, height: int):
         """Рендерит текущую 3D сцену в изображение PNG с помощью библиотеки Pillow"""
@@ -586,7 +536,7 @@ class GeometryViewer:
             edges_list = list(self.api.scene.edges.values())
             points_list = list(self.api.scene.points.values())
 
-             # собираем видимые грани с их глубиной для сортировки
+            # собираем видимые грани с их глубиной для сортировки
             visible_faces = []
             for face in faces_list:
                 if self.culling.is_face_visible(face, self.api.scene.points, view_matrix_4x4):
@@ -745,35 +695,13 @@ class GeometryViewer:
                     dpg.add_text("Save / Export", color=(100, 200, 255))
                     dpg.add_input_text(tag="scene_path", default_value=str(self.scene_path), width=260)
                     dpg.add_button(label="Save Scene", width=260, callback=lambda: self._save_scene())
-                    dpg.add_button(label="Save Scene As...", width=260,
-                                   callback=lambda: self._show_dialog("save_scene_dialog"))
-                    dpg.add_button(label="Load Scene...", width=260,
-                                   callback=lambda: self._show_dialog("load_scene_dialog"))
+                    dpg.add_button(label="Load Scene", width=260, callback=lambda: self._load_scene())
                     dpg.add_input_text(tag="png_path", default_value=str(self.png_path), width=260)
                     dpg.add_button(label="Export PNG", width=260, callback=lambda: self._export_png())
-                    dpg.add_button(label="Export PNG As...", width=260,
-                                   callback=lambda: self._show_dialog("export_png_dialog"))
 
                     dpg.add_separator()
 
                     self.info_text = dpg.add_text("", color=(150, 150, 150))
-
-        # файловые диалоги export save import
-
-        with dpg.file_dialog(tag="save_scene_dialog", show=False, width=700, height=420,
-                             default_filename=self.scene_path.name, callback=self._save_scene_as):
-            dpg.add_file_extension(".json", color=(100, 200, 255, 255))
-            dpg.add_file_extension(".*")
-
-        with dpg.file_dialog(tag="load_scene_dialog", show=False, width=700, height=420,
-                             callback=self._load_scene_from_dialog):
-            dpg.add_file_extension(".json", color=(100, 200, 255, 255))
-            dpg.add_file_extension(".*")
-
-        with dpg.file_dialog(tag="export_png_dialog", show=False, width=700, height=420,
-                             default_filename=self.png_path.name, callback=self._export_png_as):
-            dpg.add_file_extension(".png", color=(0, 255, 180, 255))
-            dpg.add_file_extension(".*")
 
         # обработчики мыши с проверкой над вьюпортом
         def on_mouse_move(sender, app_data):
@@ -830,6 +758,7 @@ class GeometryViewer:
 
         # главный цикл рендеринга
         while dpg.is_dearpygui_running():
+            self._refresh_point_selector()
             section_count = len(self._get_section_segments())
             dpg.set_value(self.info_text, 
                          f"Points: {len(self.api.scene.points)} | "
