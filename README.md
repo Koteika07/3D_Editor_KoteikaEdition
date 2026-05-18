@@ -78,22 +78,23 @@ pip install -r requirements.txt
 
 ## Структура проекта
 
+```text
 3D_Editor_KoteikaEdition/
 ├── core/
-│ ├── api.py # GeometryAPI
-│ └── scene.py # Scene (данные + JSON)
+│   ├── api.py                 # GeometryAPI
+│   └── scene.py               # Scene (данные + JSON)
 ├── geometry/
-│ ├── primitives.py # Point, Edge, Plane
-│ ├── structures.py # Face, Polyhedron
-│ └── factory_geometry.py # Фабрики геометрических объектов
+│   ├── primitives.py          # Point, Edge, Plane
+│   ├── structures.py          # Face, Polyhedron
+│   └── factory_geometry.py    # Фабрики геометрических объектов
 ├── tests/
-│ ├── test_primitives.py
-│ ├── test_structures.py
-│ ├── test_factory_geometry.py
-│ └── test_api.py
-├── gui.py # Графический интерфейс
-├── main.py # Точка входа
-└── requirements.txt # Зависимости
+│   ├── test_primitives.py
+│   ├── test_structures.py
+│   ├── test_factory_geometry.py
+│   └── test_api.py
+├── gui.py                     # Графический интерфейс
+├── main.py                    # Точка входа
+└── requirements.txt           # Зависимости
 
 ## Тестирование
 
