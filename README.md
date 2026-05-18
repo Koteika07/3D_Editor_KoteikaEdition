@@ -95,6 +95,7 @@ pip install -r requirements.txt
 ├── gui.py                     # Графический интерфейс
 ├── main.py                    # Точка входа
 └── requirements.txt           # Зависимости
+```
 
 ## Тестирование
 
