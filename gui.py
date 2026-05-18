@@ -3,6 +3,7 @@
 """
 
 import dearpygui.dearpygui as dpg
+from pathlib import Path
 import numpy as np
 import math
 
@@ -105,10 +106,30 @@ class GeometryViewer:
         self.face_fill = [100, 100, 200, 80]
         self.edge_color = [255, 200, 0, 255]
         self.point_color = [255, 50, 50, 255]
+        self.section_color = [0, 255, 180, 255]
 
         # статы для мышки
         self.last_mouse = {"x": 0.0, "y": 0.0}
         self.viewport_rect = None
+        self.drawlist_rect = None
+        self.last_draw_size = (980, 680)
+
+        self.dragging_point = False
+        self.selected_point_id = None
+        self.point_hit_radius = 16.0
+
+        # сохранение
+        self.status_message = ""
+        self.scene_path = Path("scene.json")
+        self.png_path = Path("scene.png")
+
+        # сечения
+        self.section_enabled = False
+        self.section_normal = np.array([0.0, 0.0, 1.0])
+        self.section_offset = 0.0
+
+        # снимок состояния точек для оптимизации обновления UI
+        self.points_snapshot = None
 
         # стартовая сцена
         self.api.create_cube(center=(-2, 0, 0), size=1.5, name="Cube")
@@ -148,7 +169,17 @@ class GeometryViewer:
     def _draw_point(self, point, size: tuple):
         """Рисует точку как кружок"""
         pos, _ = self._project_point(point.position, size)
-        dpg.draw_circle(pos, 5, color=self.point_color, fill=self.point_color)
+        radius = 7 if point.id == self.selected_point_id else 5
+        color = [255, 255, 255, 255] if point.id == self.selected_point_id else self.point_color
+        if point.id == self.selected_point_id:
+            dpg.draw_circle(pos, self.point_hit_radius, color=[255, 255, 255, 90], thickness=1)
+        dpg.draw_circle(pos, radius, color=color, fill=color)
+
+    def _draw_section_segment(self, segment, size: tuple):
+        start, end = segment
+        p1, _ = self._project_point(start, size)
+        p2, _ = self._project_point(end, size)
+        dpg.draw_line(p1, p2, color=self.section_color, thickness=3)
 
     def _update_viewport_rect(self):
         """Обновляет прямоугольник области вьюпорта"""
@@ -173,6 +204,364 @@ class GeometryViewer:
         mouse_x, mouse_y = dpg.get_mouse_pos(local=False)
 
         return (min_x <= mouse_x <= max_x and min_y <= mouse_y <= max_y)
+
+    def _update_drawlist_rect(self, drawlist_tag: str):
+        """Обновляет прямоугольник области рисования (drawlist)"""
+        try:
+            if dpg.does_item_exist(drawlist_tag):
+                pos = dpg.get_item_pos(drawlist_tag)
+                width = dpg.get_item_width(drawlist_tag)
+                height = dpg.get_item_height(drawlist_tag)
+                if pos and width > 0 and height > 0:
+                    self.drawlist_rect = (pos[0], pos[1], pos[0] + width, pos[1] + height)
+        except:
+            self.drawlist_rect = None
+
+    def _get_mouse_draw_pos(self):
+        """Преобразует глобальные координаты мыши в локальные координаты drawlist"""
+        mouse_x, mouse_y = dpg.get_mouse_pos(local=False)
+        rect = self.drawlist_rect or self.viewport_rect
+        if rect is None:
+            return mouse_x, mouse_y
+        return mouse_x - rect[0], mouse_y - rect[1]
+
+    def _is_control_pressed(self) -> bool:
+        """Проверяет зажат ли любой Ctrl"""
+        keys = [getattr(dpg, "mvKey_LControl", None), getattr(dpg, "mvKey_RControl", None)]
+        return any(key is not None and dpg.is_key_down(key) for key in keys)
+
+    def _find_nearest_point(self, mouse_x: float, mouse_y: float, max_distance: float = None):
+        """Находит ближайшую к курсору точку в пределах радиуса"""
+        if max_distance is None:
+            max_distance = self.point_hit_radius
+
+        nearest_id = None
+        nearest_distance = max_distance
+
+        for point in self.api.scene.points.values():
+            pos, _ = self._project_point(point.position, self.last_draw_size)
+            distance = math.hypot(pos[0] - mouse_x, pos[1] - mouse_y)
+            if distance <= nearest_distance:
+                nearest_id = point.id
+                nearest_distance = distance
+
+        return nearest_id
+
+    def _move_selected_point_by_screen_delta(self, dx: float, dy: float):
+        """Перемещает выбранную точку на экранное смещение"""
+
+        # пользователь перетаскивает точку мышью, это перемещение приисходит в экранных координатах
+        # функция преобразует это смещение обратно в 3D-пространство с учетом текущего поворота камеры
+
+        if self.selected_point_id not in self.api.scene.points:
+            return
+
+        # преобразуем экранное смещение в смещение в пространстве камеры
+        delta_view = np.array([dx / self.view.zoom, -dy / self.view.zoom, 0.0])
+
+        # переводим в мировые координаты (обратная матрица поворота)
+        delta_world = self.view.rotation_matrix().T @ delta_view
+
+        self.api.move_point(self.selected_point_id, delta_world)
+        self._sync_point_inputs()
+
+    # комбобокс - это название елемента UI - выподающего списка
+    # он сочетает в себе два элемента:
+    #  -> поле ввода
+    #  -> выпадающий список
+    def _point_items(self):
+        """Формирует список строк для комбобокса точек"""
+        return [
+            f"{point_id}: {point.position[0]:.2f}, {point.position[1]:.2f}, {point.position[2]:.2f}"
+            for point_id, point in sorted(self.api.scene.points.items())
+        ]
+
+    def _refresh_point_selector(self, force: bool = False):
+        """Обновляет список точек в комбобоксе и синхронизирует выделение"""
+        if not dpg.does_item_exist("point_selector"):
+            return
+
+        # создаем снимок текущего состояния точек для сравнения
+        snapshot = tuple(
+            (point_id, tuple(np.round(point.position, 4)))
+            for point_id, point in sorted(self.api.scene.points.items())
+        )
+
+        # обновляем UI только если состояние изменилось
+        sync_inputs = force or snapshot != self.points_snapshot
+        if sync_inputs:
+            items = self._point_items()
+            dpg.configure_item("point_selector", items=items)
+            self.points_snapshot = snapshot
+
+        # если выбранная точка была удалена, выбираем первую доступную
+        if self.selected_point_id is not None and self.selected_point_id not in self.api.scene.points:
+            self.selected_point_id = next(iter(sorted(self.api.scene.points)), None)
+            sync_inputs = True
+
+        # обновляем отображение в комбобоксе
+        if self.selected_point_id is None:
+            dpg.set_value("point_selector", "")
+        else:
+            point = self.api.scene.points[self.selected_point_id]
+            dpg.set_value(
+                "point_selector",
+                f"{point.id}: {point.position[0]:.2f}, {point.position[1]:.2f}, {point.position[2]:.2f}"
+            )
+
+        if sync_inputs:
+            self._sync_point_inputs()
+
+    def _select_point_from_combo(self, value: str):
+        """Обработчик выбора точки из комбобокса"""
+        if not value:
+            self.selected_point_id = None
+            return
+        # извлекаем ID точки из строки "123: 1.00, 2.00, 3.00"
+        self.selected_point_id = int(str(value).split(":", 1)[0])
+        self._sync_point_inputs()
+
+    def _sync_point_inputs(self):
+        """Синхронизирует поля ввода координат с выбранной точкой"""
+        if self.selected_point_id is None or self.selected_point_id not in self.api.scene.points:
+            # очищаем поля if точки нет
+            if dpg.does_item_exist("point_x"):
+                dpg.set_value("point_x", 0.0)
+                dpg.set_value("point_y", 0.0)
+                dpg.set_value("point_z", 0.0)
+            return
+
+        if not dpg.does_item_exist("point_x"):
+            return
+
+        point = self.api.scene.points[self.selected_point_id]
+        dpg.set_value("point_x", float(point.position[0]))
+        dpg.set_value("point_y", float(point.position[1]))
+        dpg.set_value("point_z", float(point.position[2]))
+
+    def _apply_point_inputs(self):
+        """Применяет координаты из полей ввода к выбранной точке"""
+        if self.selected_point_id is None or self.selected_point_id not in self.api.scene.points:
+            self.status_message = "No point selected"
+            return
+
+        position = np.array([
+            dpg.get_value("point_x"),
+            dpg.get_value("point_y"),
+            dpg.get_value("point_z"),
+        ], dtype=float)
+
+        self.api.move_point_to(self.selected_point_id, position)
+        self.status_message = f"Point {self.selected_point_id} moved"
+        self._refresh_point_selector(force=True)
+
+# =======================| Сечения |===========================
+
+    def _update_section(self):
+        """Обновляет параметры сечения из UI"""
+        self.section_enabled = bool(dpg.get_value("section_enabled"))
+        self.section_normal = np.array([
+            dpg.get_value("section_nx"),
+            dpg.get_value("section_ny"),
+            dpg.get_value("section_nz"),
+        ], dtype=float)
+        self.section_offset = float(dpg.get_value("section_offset"))
+
+    def _get_section_segments(self):
+        """Возвращает список отрезков (начало, конец) пересечения плоскости с геометрией"""
+        if self.section_enabled is False:
+            return []
+        try:
+            return self.api.section_by_plane(self.section_normal, self.section_offset)
+        except ValueError as error:
+            self.status_message = str(error)
+            return []
+
+# =======================| Сохранение Чтение json |===========================
+
+    def _path_from_input(self, tag: str, default_path: Path) -> Path:
+        """Получает путь из текстового поля ввода"""
+        value = str(dpg.get_value(tag) or "").strip()
+        return Path(value) if value else default_path
+
+    def _path_from_dialog(self, app_data: dict, fallback: Path, suffix: str) -> Path:
+        """Извлекает путь из данных диалогового окна"""
+        raw_path = app_data.get("file_path_name")
+        if not raw_path and app_data.get("file_name"):
+            raw_path = str(Path(app_data.get("current_path", ".")) / app_data["file_name"])
+
+        raw_path = raw_path or str(fallback)
+        path = Path(raw_path)
+
+        if not path.suffix:
+            path = path.with_suffix(suffix)
+        return path
+
+    def _set_scene_path(self, path: Path):
+        """Обновляет путь к сцене"""
+        self.scene_path = path
+        if dpg.does_item_exist("scene_path"):
+            dpg.set_value("scene_path", str(path))
+
+    def _show_dialog(self, tag: str):
+        """Показывает диалоговое окно"""
+        if dpg.does_item_exist(tag):
+            dpg.configure_item(tag, show=True)
+
+    def _save_scene_to_path(self, path: Path):
+        """Сохраняет сцену"""
+        if not path.suffix:
+            path = path.with_suffix(".json")  # добавляем .json if нет расширения
+        try:
+            self.api.save(path)
+        except OSError as error:  # ошибка записи на диск
+            self.status_message = str(error)
+            return
+        self._set_scene_path(path)  # обновляем путь в UI
+        self.status_message = f"Scene saved: {path}"
+
+    def _save_scene(self):
+        """Сохраняет сцену в корневую директорию проекта (из текстового поля)"""
+        path = self._path_from_input("scene_path", self.scene_path)
+        self._save_scene_to_path(path)
+
+    def _save_scene_as(self, sender, app_data):
+        """Сохраняет сцену в новый файл (выбор через диалог)"""
+        path = self._path_from_dialog(app_data, self.scene_path, ".json")
+        self._save_scene_to_path(path)
+
+    def _load_scene_from_path(self, path: Path):
+        """Загружает сцену из файла"""
+        try:
+            self.api.load(path)  # загружаем сцену через API
+        except (OSError, ValueError) as error:
+            self.status_message = str(error)
+            return
+        self._set_scene_path(path)
+        self.status_message = f"Scene loaded: {path}"
+        self._refresh_point_selector(force=True)  # обновляем список точек
+
+    def _load_scene(self):
+        """Загружает сцену из файла, лежащего в корневой директории проекта"""
+        path = self._path_from_input("scene_path", self.scene_path)
+        self._load_scene_from_path(path)
+
+    def _load_scene_from_dialog(self, sender, app_data):
+        """Загружает сцену (через файловый диалог)"""
+        path = self._path_from_dialog(app_data, self.scene_path, ".json")
+        self._load_scene_from_path(path)
+
+# =======================| Экспорт png  |===========================
+
+    def _set_png_path(self, path: Path):
+        """Обновляет путь для экспорта png в UI"""
+        self.png_path = path
+        if dpg.does_item_exist("png_path"):
+            dpg.set_value("png_path", str(path))
+
+    def _export_png_to_path(self, path: Path):
+        if not path.suffix:
+            path = path.with_suffix(".png")  # добавляем .png
+
+        width = max(1, int(self.last_draw_size[0]))
+        height = max(1, int(self.last_draw_size[1]))
+
+        try:
+            image = self._render_to_image(width, height)  # рендерим в PIL Image
+        except RuntimeError as error:
+            self.status_message = str(error)
+            return
+
+        if path.parent != Path("."):  # если папка не текущая
+            path.parent.mkdir(parents=True, exist_ok=True)  # создаём папки рекурсивно
+
+        image.save(path)  # сохраняем
+        self._set_png_path(path)
+        self.status_message = f"PNG exported: {path}"
+
+    def _export_png(self):
+        """Экспорт в корневую директорию проекта"""
+        path = self._path_from_input("png_path", self.png_path)
+        self._export_png_to_path(path)
+
+    def _export_png_as(self, sender, app_data):
+        """Экспорт с выбором файла (через диалог)"""
+        path = self._path_from_dialog(app_data, self.png_path, ".png")
+        self._export_png_to_path(path)
+
+    def _render_to_image(self, width: int, height: int):
+        """Рендерит текущую 3D сцену в изображение PNG с помощью библиотеки Pillow"""
+        try:
+            from PIL import Image, ImageDraw
+        except ImportError as error:
+            raise RuntimeError("Pillow is required for PNG export") from error
+
+        image = Image.new("RGBA", (width, height), (25, 25, 30, 255))
+        draw = ImageDraw.Draw(image, "RGBA")
+        size = (width, height)
+
+        # получаем матрицу поворота камеры (3x3)
+        # создаем матрицу 4x4 для работы с 3D трансформациям
+        view_matrix = self.view.rotation_matrix()
+        view_matrix_4x4 = np.eye(4)
+        view_matrix_4x4[:3, :3] = view_matrix
+
+        faces_list = list(self.api.scene.faces.values())
+        edges_list = list(self.api.scene.edges.values())
+        points_list = list(self.api.scene.points.values())
+
+        # вычисляем глубину граней в 3-ёх меронм пространтстве
+        visible_faces = []
+        for face in faces_list:
+            if self.culling.is_face_visible(face, self.api.scene.points, view_matrix_4x4):
+                center = np.mean([self.api.scene.points[vid].position for vid in face.vertex_ids], axis=0)
+                _, depth = self._project_point(center, size)
+                visible_faces.append((depth, face))
+
+        visible_faces.sort(key=lambda x: x[0], reverse=True)
+
+        # рисуем
+        for _, face in visible_faces:
+            verts = []
+            for vid in face.vertex_ids:
+                if vid in self.api.scene.points:
+                    proj, _ = self._project_point(self.api.scene.points[vid].position, size)
+                    verts.append(proj)
+            if len(verts) >= 3:
+                draw.polygon(verts, outline=tuple(self.face_outline), fill=tuple(self.face_fill))
+
+        for edge in edges_list:
+            if self.culling.is_edge_visible(edge, self.api.scene.points, faces_list, view_matrix_4x4):
+                if edge.point_1_id in self.api.scene.points and edge.point_2_id in self.api.scene.points:
+                    p1, _ = self._project_point(self.api.scene.points[edge.point_1_id].position, size)
+                    p2, _ = self._project_point(self.api.scene.points[edge.point_2_id].position, size)
+                    draw.line([p1, p2], fill=tuple(self.edge_color), width=2)
+
+        for segment in self._get_section_segments():
+            p1, _ = self._project_point(segment[0], size)
+            p2, _ = self._project_point(segment[1], size)
+            draw.line([p1, p2], fill=tuple(self.section_color), width=3)
+
+        for point in points_list:
+            if self.culling.is_point_visible(point.id, self.api.scene.points, faces_list, view_matrix_4x4):
+                pos, _ = self._project_point(point.position, size)
+                radius = 7 if point.id == self.selected_point_id else 5
+                color = (255, 255, 255, 255) if point.id == self.selected_point_id else tuple(self.point_color)
+                if point.id == self.selected_point_id:
+                    hit_radius = int(self.point_hit_radius)
+                    draw.ellipse(
+                        [pos[0] - hit_radius, pos[1] - hit_radius, pos[0] + hit_radius, pos[1] + hit_radius],
+                        outline=(255, 255, 255, 90)
+                    )
+                draw.ellipse(
+                    [pos[0] - radius, pos[1] - radius, pos[0] + radius, pos[1] + radius],
+                    outline=color,
+                    fill=color
+                )
+
+        return image
+
+# =======================| Render  |===========================
 
     def render(self, viewport_tag: str, drawlist_tag: str):
         """Основной рендер для сцены"""
@@ -201,7 +590,6 @@ class GeometryViewer:
             visible_faces = []
             for face in faces_list:
                 if self.culling.is_face_visible(face, self.api.scene.points, view_matrix_4x4):
-                    
                     center = np.mean([self.api.scene.points[vid].position for vid in face.vertex_ids], axis=0)
                     _, depth = self._project_point(center, (w, h))
                     visible_faces.append((depth, face))
@@ -219,10 +607,18 @@ class GeometryViewer:
                 if self.culling.is_edge_visible(edge, self.api.scene.points, faces_list, view_matrix_4x4):
                     self._draw_edge(edge, (w, h))
 
+            # рисуем сечения
+            for segment in self._get_section_segments():
+                self._draw_section_segment(segment, (w, h))
+
             # рисуем видимые точки
             for point in points_list:
                 if self.culling.is_point_visible(point.id, self.api.scene.points, faces_list, view_matrix_4x4):
                     self._draw_point(point, (w, h))
+
+            self._update_drawlist_rect(drawlist_tag)    
+
+# =======================| GUI  |===========================
 
     def run(self):
         """Запускает графический интерфейс"""
@@ -242,8 +638,7 @@ class GeometryViewer:
                     dpg.add_spacer(height=5)
 
                 # сontrol panel
-                with dpg.child_window(width=290, height=680, border=True,
-                                      no_scrollbar=True, no_scroll_with_mouse=True):
+                with dpg.child_window(width=350, height=680, border=True):
 
                     dpg.add_text("Camera Controls", color=(100, 200, 255))
                     dpg.add_separator()
@@ -294,10 +689,16 @@ class GeometryViewer:
                                        width=260, no_inputs=True, label="Point Color",
                                        callback=lambda s, a: self._update_point_color(a))
 
+                    # color picker для сечений
+                    dpg.add_color_edit(tag="section_color_picker",
+                                    default_value=self.section_color[:3],
+                                    width=260, no_inputs=True, label="Section Color",
+                                    callback=lambda s, a: self._update_section_color(a))
+
                     dpg.add_separator()
 
                     dpg.add_text("Objects", color=(100, 200, 255))
-                    
+
                     dpg.add_button(label="Add Cube", width=260,
                                    callback=lambda: self.api.create_cube(center=(0, 0, 0), size=1.0))
                     dpg.add_button(label="Add Pyramid", width=260,
@@ -313,19 +714,81 @@ class GeometryViewer:
 
                     dpg.add_separator()
 
+                    dpg.add_text("Point Move", color=(100, 200, 255))
+                    dpg.add_combo(tag="point_selector", items=[], width=260,
+                                  callback=lambda s, a: self._select_point_from_combo(a))
+                    dpg.add_input_float(tag="point_x", label="X", width=200, step=0.1)
+                    dpg.add_input_float(tag="point_y", label="Y", width=200, step=0.1)
+                    dpg.add_input_float(tag="point_z", label="Z", width=200, step=0.1)
+                    dpg.add_slider_float(tag="point_hit_radius", label="Hit Radius", default_value=self.point_hit_radius,
+                                         min_value=6.0, max_value=40.0, width=200,
+                                         callback=lambda s, a: setattr(self, 'point_hit_radius', a))
+                    dpg.add_button(label="Apply Point Position", width=260,
+                                   callback=lambda: self._apply_point_inputs())
+
+                    dpg.add_separator()
+
+                    dpg.add_text("Section", color=(100, 200, 255))
+                    dpg.add_checkbox(tag="section_enabled", label="Show section", default_value=False,
+                                     callback=lambda s, a: self._update_section())
+                    dpg.add_input_float(tag="section_nx", label="Nx", default_value=0.0, width=200, step=0.1,
+                                        callback=lambda s, a: self._update_section())
+                    dpg.add_input_float(tag="section_ny", label="Ny", default_value=0.0, width=200, step=0.1,
+                                        callback=lambda s, a: self._update_section())
+                    dpg.add_input_float(tag="section_nz", label="Nz", default_value=1.0, width=200, step=0.1,
+                                        callback=lambda s, a: self._update_section())
+                    dpg.add_input_float(tag="section_offset", label="Offset", default_value=0.0, width=200, step=0.1,
+                                        callback=lambda s, a: self._update_section())
+
+                    dpg.add_separator()
+
+                    dpg.add_text("Save / Export", color=(100, 200, 255))
+                    dpg.add_input_text(tag="scene_path", default_value=str(self.scene_path), width=260)
+                    dpg.add_button(label="Save Scene", width=260, callback=lambda: self._save_scene())
+                    dpg.add_button(label="Save Scene As...", width=260,
+                                   callback=lambda: self._show_dialog("save_scene_dialog"))
+                    dpg.add_button(label="Load Scene...", width=260,
+                                   callback=lambda: self._show_dialog("load_scene_dialog"))
+                    dpg.add_input_text(tag="png_path", default_value=str(self.png_path), width=260)
+                    dpg.add_button(label="Export PNG", width=260, callback=lambda: self._export_png())
+                    dpg.add_button(label="Export PNG As...", width=260,
+                                   callback=lambda: self._show_dialog("export_png_dialog"))
+
+                    dpg.add_separator()
+
                     self.info_text = dpg.add_text("", color=(150, 150, 150))
+
+        # файловые диалоги export save import
+
+        with dpg.file_dialog(tag="save_scene_dialog", show=False, width=700, height=420,
+                             default_filename=self.scene_path.name, callback=self._save_scene_as):
+            dpg.add_file_extension(".json", color=(100, 200, 255, 255))
+            dpg.add_file_extension(".*")
+
+        with dpg.file_dialog(tag="load_scene_dialog", show=False, width=700, height=420,
+                             callback=self._load_scene_from_dialog):
+            dpg.add_file_extension(".json", color=(100, 200, 255, 255))
+            dpg.add_file_extension(".*")
+
+        with dpg.file_dialog(tag="export_png_dialog", show=False, width=700, height=420,
+                             default_filename=self.png_path.name, callback=self._export_png_as):
+            dpg.add_file_extension(".png", color=(0, 255, 180, 255))
+            dpg.add_file_extension(".*")
 
         # обработчики мыши с проверкой над вьюпортом
         def on_mouse_move(sender, app_data):
-            if тщеself._is_mouse_over_viewport():
+            if self._is_mouse_over_viewport():
                 if dpg.is_mouse_button_down(dpg.mvMouseButton_Left):
                     mx, my = dpg.get_mouse_pos(local=False)
                     dx = mx - self.last_mouse["x"]
                     dy = my - self.last_mouse["y"]
 
                     shift_pressed = dpg.is_key_down(dpg.mvKey_LShift) or dpg.is_key_down(dpg.mvKey_RShift)
+                    control_pressed = self._is_control_pressed() 
 
-                    if shift_pressed:
+                    if control_pressed and self.selected_point_id is not None:
+                        self._move_selected_point_by_screen_delta(dx, dy)
+                    elif shift_pressed:
                         self.view.offset_x += dx
                         self.view.offset_y += dy
                     else:
@@ -341,6 +804,12 @@ class GeometryViewer:
                 mx, my = dpg.get_mouse_pos(local=False)
                 self.last_mouse["x"] = mx
                 self.last_mouse["y"] = my
+
+                draw_x, draw_y = self._get_mouse_draw_pos()
+                point_id = self._find_nearest_point(draw_x, draw_y)
+                if point_id is not None:
+                    self.selected_point_id = point_id
+                    self._refresh_point_selector(force=True)
 
         def on_mouse_wheel(sender, app_data):
             if self._is_mouse_over_viewport():
@@ -361,10 +830,13 @@ class GeometryViewer:
 
         # главный цикл рендеринга
         while dpg.is_dearpygui_running():
+            section_count = len(self._get_section_segments())
             dpg.set_value(self.info_text, 
                          f"Points: {len(self.api.scene.points)} | "
                          f"Edges: {len(self.api.scene.edges)} | "
-                         f"Faces: {len(self.api.scene.faces)}")
+                         f"Faces: {len(self.api.scene.faces)} | "
+                         f"Sections: {section_count} | "
+                         f"{self.status_message}")
             self.render("Viewport", drawlist_tag)
             dpg.render_dearpygui_frame()
 
@@ -400,6 +872,12 @@ class GeometryViewer:
         # color приходит в формате RGB в диапазоне 0-1
         r, g, b = [int(c * 255) for c in color[:3]]
         self.point_color = [r, g, b, 255]
+
+    def _update_section_color(self, color):
+        """Обновляет цвет линий сечений"""
+        # color приходит в формате RGB в диапазоне 0-1
+        r, g, b = [int(c * 255) for c in color[:3]]
+        self.section_color = [r, g, b, 255]
 
 
 def main():
